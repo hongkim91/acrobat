@@ -212,8 +212,6 @@ m_usb_tx_int(x_omega);
 m_usb_tx_int(x_angle);
 m_usb_tx_string("\n");
 
-//git test
-
  // // track angle
  // gyroXangle += (float) x_omega * DT;  // way off
 
