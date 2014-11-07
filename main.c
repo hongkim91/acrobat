@@ -207,12 +207,12 @@ void convertGyroToDps_print(void)
   /* send_float(x_angle); */
 
 m_usb_tx_string(" Ax:  ");
-/* m_usb_tx_int(x_omega); */
+m_usb_tx_int(x_omega);
 /* m_usb_tx_int(x_acc); */
 m_usb_tx_int(x_angle);
 m_usb_tx_string("\n");
 
-
+//git test
 
  // // track angle
  // gyroXangle += (float) x_omega * DT;  // way off
