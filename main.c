@@ -8,6 +8,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "m_general.h"
 #include "m_usb.h"
 #include "m_imu.h"
@@ -29,12 +30,15 @@
 #define OMEGA_X_OFFSET 3
 #define RAD_TO_DEG 57.29578
 
+#define Kp 0.25
+
 void init();
 void init_timer1();
-void print_estimated_theta();
+void estimate_theta();
 void send_float(char *label, float value);
 void motor_init();
 void init_timer0();
+void set_motor_input_voltage(float voltage);
 
 int imu_buf[9];
 float G_GAIN[4] = {131, 65.5, 32.8, 16.4}; //[LSB/dps]
@@ -46,19 +50,26 @@ float acc_angle_x = 0;
 float gyro_angle_x = 0;
 float cf_angle_x = 0;
 
+volatile int new_imu_values_flag = 0;
+
 int main()
 {
   init();
   m_bus_init();
   m_imu_init(ACC_SCALE, GYRO_SCALE);
+  motor_init();
+  init_timer0();
   init_timer1();
-  /* motor_init(); */
-  /* init_timer0(); */
 
-  //  motors on
-  // OCR0A = 200;
-
-  while(1) { }
+  while(1) {
+    if (new_imu_values_flag) {
+      m_red(TOGGLE);
+      m_imu_raw(imu_buf);
+      estimate_theta();
+      set_motor_input_voltage(Kp * cf_angle_x);
+      new_imu_values_flag = 0;
+    }
+  }
 }
 
 void init()
@@ -105,7 +116,7 @@ void init_timer1()
   set(TIMSK1,OCIE1A);
 }
 
-void print_estimated_theta()
+void estimate_theta()
 {
   acc_angle_x = atan2(imu_buf[AX], imu_buf[AZ]) * RAD_TO_DEG;
 
@@ -122,18 +133,16 @@ void print_estimated_theta()
   // is highly influenced by omega_x * DT
   cf_angle_x = ALPHA * (cf_angle_x + omega_x*DT) + (1-ALPHA)*acc_angle_x;
 
+  usb_tx_string("-----------------------\n");
   send_float("acc_angle", acc_angle_x);
   send_float("omega", omega_x);
   send_float("cf_angle", cf_angle_x);
-  usb_tx_string("-----------------------\n");
 }
 
 // pull data from imu to buf
 ISR(TIMER1_COMPA_vect)
 {
-  m_imu_raw(imu_buf);
-  print_estimated_theta();
-  m_red(TOGGLE);
+  new_imu_values_flag = 1;
 }
 
 char buf[100];
@@ -145,29 +154,32 @@ void send_float(char *label, float value) {
   }
 }
 
-//// CODE BELOW NOT YET USED ////
-
 void motor_init()
-{  // set pin B7 as output  - note this problem is symettric. thus will only use one pin for both motors
-  set(DDRB,7);   ///ENABLE PINS
+{
+  ///ENABLE PIN
+  set(DDRB,7);
 
-  //MOTOR DIRECTION
+  //MOTOR DIRECTION PIN
   set(DDRB,3);
-
-  // intially low
-  clear(PORTB,3);
 
   // set speed of motors with pwm - adjusts time motor is in with enable to b7
 
   // slow down pwm: stay in hundreds Hz (~300)
 }
 
+// set motor input voltage by adjusting OCR0A:  Vout = (OCR0n)/(255)*Vin
 void init_timer0()
-{  // set speed by adjusting OCR0A and OCR0B:  Vout = (OCR0n)/(255)*Vin
-
+{
   // BE SURE D0 IS NOT MESSED UP BC OF THIS TIMER
 
-  // set timer mode:UP to 0xFF, PWM mode
+  // set prescaler to /256
+  // timer freq = 16MHz /256 = 62.5kHz
+  set(TCCR0B,CS02);
+  clear(TCCR0B,CS01);
+  clear(TCCR0B,CS00);
+
+  // set timer mode: UP to 0xFF, PWM mode
+  // pwm freq = timer freq /256 = 244Hz
   clear(TCCR0B,WGM02);
   set(TCCR0A,WGM01);
   set(TCCR0A,WGM00);
@@ -176,15 +188,24 @@ void init_timer0()
   set(TCCR0A, COM0A1);
   clear(TCCR0A, COM0A0);
 
-  // enable global interrupts
-  sei();
-
   //initially duty cycle is 0 - motor is off
   OCR0A = 0;
+}
 
-  // set prescaler to /8 = 2 Mhz
-  clear(TCCR0B,CS02);
-  set(TCCR0B,CS01);
-  clear(TCCR0B,CS00);
+void set_motor_input_voltage(float voltage) {
+  int target_OCR0A = 51 * fabs(voltage);
+  if (target_OCR0A > 255) {
+    OCR0A = 255;
+  } else {
+    OCR0A = target_OCR0A;
+  }
+  if (voltage > 0) {
+    set(PORTB, 3);
+  } else {
+    clear(PORTB, 3);
+  }
+  send_float("motor voltage", voltage);
+  send_float("OCR0A", OCR0A);
+  send_float("PORTB", check(PORTB,3));
 }
 
