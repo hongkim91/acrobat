@@ -6,7 +6,6 @@
 //
 //
 
-
 #include <avr/io.h>
 #include <math.h>
 #include "m_general.h"
@@ -14,8 +13,9 @@
 #include "m_imu.h"
 #include "m_bus.h"
 #include "m_rf.h"
-#define BETA 0.75 //smoothing parameter: higher BETA make old value more significant
-#define G_GAIN 16.4 // gryo scale---> sensitivity..... 0 --> 131 , 1--> 65.5, 2-->32.8, 3-->16.4 [LSB/dps] from data sheet of imu
+#define BETA 0.7 //smoothing parameter: higher BETA make old value more significant
+#define BETA_COMP 0.1
+#define G_GAIN 131 // gryo scale---> sensitivity..... 0 --> 131 , 1--> 65.5, 2-->32.8, 3-->16.4 [LSB/dps] from data sheet of imu
 #define A_GAIN 4096 //accel scale---> sensitivity.... 0 --> 16384 , 1--> 8192, 2-->4096, 3-->2048 [LSB/g] from data sheet of imu
 #define x_omega_offset 3
 #define y_omega_offset -1
@@ -26,14 +26,12 @@
 #define GX 3
 #define GY 4
 #define GZ 5
-
+#define g 9.8
+#define M_PI 3.14159265358979323846
+#define RAD_TO_DEG 57.29578
 
 #include <string.h>
 #include <stdio.h>
-
-
-
-
 
 void init(void);
 void motor_init (void);
@@ -48,9 +46,22 @@ volatile float x_omega = 0.0;
 volatile float y_omega = 0.0;
 volatile float z_omega = 0.0;
 volatile float x_acc = 0.0;
+volatile float y_acc = 0.0;
+volatile float z_acc = 0.0;
+volatile float dt_a = 0.0;
 int imu_buffer[9];
+
 float DT;
 volatile int gyroXangle;
+volatile float old_fst_x_angle = 0;
+volatile float fst_x_angle = 0;
+volatile float low_x_angle = 0;
+volatile float high_x_angle = 0;
+volatile float x_angle = 0;
+volatile float CFangleX = 0;
+volatile float CFangleY = 0;
+volatile float AccXangle= 0;
+volatile float AccYangle = 0;
 
 
 
@@ -58,7 +69,7 @@ int main(void)
 {
     init();
     m_bus_init();
-    m_imu_init(2,3);
+    m_imu_init(0,0);
     motor_init();
     init_timer0();
     init_timer1();
@@ -122,6 +133,8 @@ void smooth(void)
    // smooth_imu_values[AY] = (float)BETA*smooth_imu_values[AY] + (float)(1-BETA)*imu_buffer[AY];
    smooth_imu_values[GX] = (float)BETA*smooth_imu_values[GX] + (float)(1-BETA)*imu_buffer[GX];
 
+
+
 }
 
 void init_timer0(void)
@@ -162,12 +175,12 @@ void init_timer1(void)
 
     //update at  100Hz - clock/prescale
     OCR1A = 20000;
-
+    dt_a = OCR1A + 0.01;
     // this is the DT that will be used
     // DT = OCR1A / Timer_Prescaler
     // DT = 20000 / 2*10^6;  // =  0.01 s = 10 ms  => should be loop  but i set it to timer period.  might be problem but prob not
 
-    DT = (float) OCR1A/ (2*10^6);
+    DT = (float) dt_a/ ((2*10^6)+0.01);
 
     // enable global interrupts
     sei();
@@ -190,26 +203,81 @@ void send_float(float x) {
   }
 }
 
-volatile float x_angle = 0;
 
 void convertGyroToDps_print(void)
 { //convert gyro values to degrees per second
 
 // smoothed
-  /* x_omega = (float) smooth_imu_values[GX]/G_GAIN + x_omega_offset; */
-  x_omega = (float) imu_buffer[GX]/G_GAIN + x_omega_offset;
-/* x_acc = (float) smooth_imu_values[AX]/A_GAIN; */
-  x_acc = imu_buffer[AX];
 
-  /* send_float(x_acc); */
-  x_angle = x_angle + ((int) x_omega * DT);
+  x_omega = (float)imu_buffer[GX]/G_GAIN + x_omega_offset;
+  y_omega = (float)imu_buffer[GY]/G_GAIN + y_omega_offset;
+
+  x_acc = (float)imu_buffer[AX];
+  y_acc = (float)imu_buffer[AY];
+  z_acc = (float)imu_buffer[AZ];
+
+  AccXangle = (float) (atan2(y_acc, z_acc) + M_PI) * RAD_TO_DEG;
+  AccYangle = (float) (atan2(z_acc, x_acc) + M_PI) * RAD_TO_DEG;
+
+  CFangleX= BETA_COMP*(CFangleX+x_omega*DT) +(1 - BETA_COMP) * AccXangle;
+  CFangleY= BETA_COMP*(CFangleY+y_omega*DT) +(1 - BETA_COMP) * AccYangle;
+
+
+
+
+//   old_fst_x_angle = fst_x_angle;
+//   fst_x_angle = (old_fst_x_angle + (x_omega) * DT);
+
+
+// //HIGH PASS
+// // new changes in angle approximation via the angular velocity has a large influence
+//                       // last value                   // diff in angle approx via ang velocity
+//   high_x_angle = (BETA_COMP)*high_x_angle + BETA_COMP*(fst_x_angle - old_fst_x_angle);
+
+// //LOW PASS
+
+//    low_x_angle = BETA_COMP*(low_x_angle) + (1-BETA_COMP)*(-z_acc/g);
+
+// // Theta ~= HIGH PASS EST + LOW PASS EST
+
+//    x_angle = high_x_angle + low_x_angle;
+
+
+
 
   /* send_float(x_angle); */
 
-m_usb_tx_string(" Ax:  ");
+//m_usb_tx_string(" X_angle:  ");
+//m_usb_tx_int(x_angle);
+// m_usb_tx_string(" x_omega:  ");
+// m_usb_tx_int(x_omega);
+
+// m_usb_tx_string(" fst_x_angle:  ");
+// m_usb_tx_int(fst_x_angle);
+// m_usb_tx_string(" x_omega:  ");
+// m_usb_tx_int(x_omega);
+
+// m_usb_tx_string(" z_acc :  ");
+// m_usb_tx_int(z_acc);
+
+// m_usb_tx_string(" x_acc :  ");
+// m_usb_tx_int(x_acc);
+
+
+m_usb_tx_string(" CFangleX:  ");
+m_usb_tx_int(CFangleX);
+
+m_usb_tx_string(" AccXangle:  ");
+m_usb_tx_int(AccXangle);
+
+m_usb_tx_string(" x_omega:  ");
 m_usb_tx_int(x_omega);
+
+
+// m_usb_tx_string(" Y_angle:  ");
+// m_usb_tx_int(CFangleY);
 /* m_usb_tx_int(x_acc); */
-m_usb_tx_int(x_angle);
+// m_usb_tx_int(x_angle);
 m_usb_tx_string("\n");
 
  // // track angle
@@ -237,5 +305,3 @@ ISR(TIMER1_COMPA_vect)
 
 
 }
-
-
