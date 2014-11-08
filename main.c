@@ -32,6 +32,9 @@
 
 #define Kp 0.25
 #define Kd 0.1
+#define Ki 0.01
+
+#define DEBUG 1
 
 void init();
 void init_timer1();
@@ -54,11 +57,14 @@ float priv_cf_angle_x = 0;
 float tgt_volt = 0;
 
 volatile int new_imu_values_flag = 0;
+int poll_count = 0;
+int angle_sum = 0;
+float init_angle = 0;
+float integral_term = 0;
 
 int main()
 {
   init();
-  m_bus_init();
   m_imu_init(ACC_SCALE, GYRO_SCALE);
   motor_init();
   init_timer0();
@@ -70,7 +76,14 @@ int main()
       m_imu_raw(imu_buf);
       estimate_theta();
       tgt_volt = Kp * cf_angle_x;
+      send_float("V_prop", tgt_volt);
       tgt_volt += Kd * (cf_angle_x - priv_cf_angle_x)/DT;
+      send_float("V_deriv", Kd * (cf_angle_x - priv_cf_angle_x)/DT);
+      if (init_angle != 0) {
+        integral_term += (cf_angle_x - init_angle)*DT;
+        tgt_volt += Ki*integral_term;
+        send_float("V_int", Ki*integral_term);
+      }
       set_motor_input_voltage(tgt_volt);
       new_imu_values_flag = 0;
     }
@@ -89,7 +102,9 @@ void init()
   m_disableJTAG();
 
   // initalize usb communiations
-  m_usb_init();
+  if (DEBUG) {
+    m_usb_init();
+  }
 }
 
 // this timer will pull values from the imu when it overflows
@@ -145,6 +160,15 @@ void estimate_theta()
   send_float("acc_angle", acc_angle_x);
   send_float("omega", omega_x);
   send_float("cf_angle", cf_angle_x);
+
+  // Average the cf angle for two seconds to set the initial angle.
+  if (poll_count < 2*POLLING_FREQ) {
+    angle_sum += cf_angle_x;
+    poll_count++;
+  } else if (init_angle == 0) {
+    init_angle = angle_sum/(2.0*POLLING_FREQ);
+    send_float("init_angle", init_angle);
+  }
 }
 
 // pull data from imu to buf
@@ -155,10 +179,12 @@ ISR(TIMER1_COMPA_vect)
 
 char buf[100];
 void send_float(char *label, float value) {
-  sprintf(buf, "%s: %.3f\n", label, value);
-  int i;
-  for (i=0; i< strlen(buf); i++) {
-    m_usb_tx_char(*(buf+i));
+  if (DEBUG) {
+    sprintf(buf, "%s: %.3f\n", label, value);
+    int i;
+    for (i=0; i< strlen(buf); i++) {
+      m_usb_tx_char(*(buf+i));
+    }
   }
 }
 
