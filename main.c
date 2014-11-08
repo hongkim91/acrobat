@@ -31,6 +31,7 @@
 #define RAD_TO_DEG 57.29578
 
 #define Kp 0.25
+#define Kd 0.1
 
 void init();
 void init_timer1();
@@ -49,6 +50,8 @@ float omega_x = 0;
 float acc_angle_x = 0;
 float gyro_angle_x = 0;
 float cf_angle_x = 0;
+float priv_cf_angle_x = 0;
+float tgt_volt = 0;
 
 volatile int new_imu_values_flag = 0;
 
@@ -66,7 +69,9 @@ int main()
       m_red(TOGGLE);
       m_imu_raw(imu_buf);
       estimate_theta();
-      set_motor_input_voltage(Kp * cf_angle_x);
+      tgt_volt = Kp * cf_angle_x;
+      tgt_volt += Kd * (cf_angle_x - priv_cf_angle_x)/DT;
+      set_motor_input_voltage(tgt_volt);
       new_imu_values_flag = 0;
     }
   }
@@ -128,6 +133,9 @@ void estimate_theta()
 
   // This value simply drifts away from zero.
   // gyro_angle_x = gyro_angle_x + omega_x*DT;
+
+  // Store the previous cf angle for later derivative calculation.
+  priv_cf_angle_x = cf_angle_x;
 
   // In the long term cf_angle converges to acc_angle, but in the short term
   // is highly influenced by omega_x * DT
