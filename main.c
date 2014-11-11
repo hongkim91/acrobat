@@ -36,8 +36,6 @@
 
 #define DEBUG 1
 
-//git test
-
 void init();
 void init_timer1();
 void estimate_theta();
