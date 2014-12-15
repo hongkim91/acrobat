@@ -16,7 +16,7 @@
 #define SYSTEM_CLOCK 16*pow(10,6)
 #define POLLING_FREQ 100
 
-#define ACC_SCALE 1
+#define ACC_SCALE 0
 #define GYRO_SCALE 0
 
 #define AX 0
@@ -26,13 +26,14 @@
 #define GY 4
 #define GZ 5
 
-#define ALPHA 0.98
-#define OMEGA_X_OFFSET 3
+#define ALPHA 0.90
+#define OMEGA_X_OFFSET 2.8
+#define ACC_ANGLE_X_OFFSET -2.5
 #define RAD_TO_DEG 57.29578
 
-#define Kp 0.25
-#define Kd 0.1
-#define Ki 0.01
+#define Kp 40
+#define Kd 70
+#define Ki 0.00
 
 #define DEBUG 1
 
@@ -42,19 +43,18 @@ void estimate_theta();
 void send_float(char *label, float value);
 void motor_init();
 void init_timer0();
-void set_motor_input_voltage(float voltage);
+void set_motor_duty_cycle(int voltage);
 
 int imu_buf[9];
 float G_GAIN[4] = {131, 65.5, 32.8, 16.4}; //[LSB/dps]
 float A_GAIN[4] = {16384, 8192, 4096, 2048}; //[LSB/g]
-float DT = 1.0/POLLING_FREQ;
 
 float omega_x = 0;
 float acc_angle_x = 0;
 float gyro_angle_x = 0;
 float cf_angle_x = 0;
 float priv_cf_angle_x = 0;
-float tgt_volt = 0;
+float tgt_duty_cycle = 0;
 
 volatile int new_imu_values_flag = 0;
 int poll_count = 0;
@@ -69,22 +69,23 @@ int main()
   motor_init();
   init_timer0();
   init_timer1();
+  /* init_rf(); */
 
   while(1) {
     if (new_imu_values_flag) {
       m_red(TOGGLE);
       m_imu_raw(imu_buf);
       estimate_theta();
-      tgt_volt = Kp * cf_angle_x;
-      send_float("V_prop", tgt_volt);
-      tgt_volt += Kd * (cf_angle_x - priv_cf_angle_x)/DT;
-      send_float("V_deriv", Kd * (cf_angle_x - priv_cf_angle_x)/DT);
+      tgt_duty_cycle = Kp * cf_angle_x;
+      send_float("V_prop", tgt_duty_cycle);
+      tgt_duty_cycle += Kd * (cf_angle_x - priv_cf_angle_x);
+      send_float("V_deriv", Kd * (cf_angle_x - priv_cf_angle_x));
       if (init_angle != 0) {
-        integral_term += (cf_angle_x - init_angle)*DT;
-        tgt_volt += Ki*integral_term;
-        send_float("V_int", Ki*integral_term);
+        /* integral_term += (cf_angle_x - init_angle)*DT; */
+        /* tgt_duty_cycle += Ki*integral_term; */
+        /* send_float("V_int", Ki*integral_term); */
       }
-      set_motor_input_voltage(tgt_volt);
+      set_motor_duty_cycle(tgt_duty_cycle);
       new_imu_values_flag = 0;
     }
   }
@@ -139,6 +140,7 @@ void init_timer1()
 void estimate_theta()
 {
   acc_angle_x = atan2(imu_buf[AX], imu_buf[AZ]) * RAD_TO_DEG;
+  acc_angle_x += ACC_ANGLE_X_OFFSET;
 
   // Gives same result as above for small angles.
   // theta_x = a_x/g
@@ -154,7 +156,8 @@ void estimate_theta()
 
   // In the long term cf_angle converges to acc_angle, but in the short term
   // is highly influenced by omega_x * DT
-  cf_angle_x = ALPHA * (cf_angle_x + omega_x*DT) + (1-ALPHA)*acc_angle_x;
+  /* cf_angle_x = ALPHA * (cf_angle_x + omega_x*DT) + (1-ALPHA)*acc_angle_x; */
+  cf_angle_x = ALPHA * (cf_angle_x) + (1-ALPHA)*acc_angle_x;
 
   usb_tx_string("-----------------------\n");
   send_float("acc_angle", acc_angle_x);
@@ -167,8 +170,9 @@ void estimate_theta()
     poll_count++;
   } else if (init_angle == 0) {
     init_angle = angle_sum/(2.0*POLLING_FREQ);
-    send_float("init_angle", init_angle);
+    /* send_float("init_angle", init_angle); */
   }
+  /* send_float("init_angle", init_angle); */
 }
 
 // pull data from imu to buf
@@ -226,20 +230,21 @@ void init_timer0()
   OCR0A = 0;
 }
 
-void set_motor_input_voltage(float voltage) {
-  int target_OCR0A = 51 * fabs(voltage);
+void set_motor_duty_cycle(int tgt) {
+  int target_OCR0A = abs(tgt);
   if (target_OCR0A > 255) {
     OCR0A = 255;
+  /* } else if (target_OCR0A < 30) { */
+  /*   OCR0A = 30; */
   } else {
     OCR0A = target_OCR0A;
   }
-  if (voltage > 0) {
-    set(PORTB, 3);
-  } else {
+  if (tgt > 0) {
     clear(PORTB, 3);
+  } else {
+    set(PORTB, 3);
   }
-  send_float("motor voltage", voltage);
+  send_float("tgt_duty_cycle", tgt);
   send_float("OCR0A", OCR0A);
   send_float("PORTB", check(PORTB,3));
 }
-
